@@ -3,6 +3,19 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 
+/**
+ * Get the FFmpeg/FFprobe binary paths.
+ * In Electron mode, these are set via environment variables pointing to bundled binaries.
+ * Otherwise, falls back to system-installed ffmpeg/ffprobe.
+ */
+function getFfmpegPath(): string {
+  return process.env.FFMPEG_PATH || "ffmpeg";
+}
+
+function getFfprobePath(): string {
+  return process.env.FFPROBE_PATH || "ffprobe";
+}
+
 export interface ProbeResult {
   width: number;
   height: number;
@@ -17,7 +30,7 @@ export interface ProbeResult {
 export function probeVideo(inputPath: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
     execFile(
-      "ffprobe",
+      getFfprobePath(),
       [
         "-v", "quiet",
         "-print_format", "json",
@@ -132,7 +145,7 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
   const totalDuration = parseFloat(probe.duration) || 0;
 
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn("ffmpeg", args, {
+    const ffmpeg = spawn(getFfmpegPath(), args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

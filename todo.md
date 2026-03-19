@@ -16,6 +16,12 @@
 - [x] Create Dockerfile with FFmpeg and Node.js for Render.com
 - [x] Create render.yaml blueprint for Render.com
 - [x] Adapt app for standalone deployment (handle missing Manus-specific env vars gracefully)
-- [ ] Push changes to GitHub
+- [x] Push changes to GitHub
 - [ ] Set up Render.com web service connected to GitHub repo
 - [ ] Verify deployment works end-to-end
+- [x] Create Electron app wrapper (main process, BrowserWindow)
+- [x] Bundle FFmpeg binary for macOS (ffmpeg-static or similar)
+- [x] Adapt server to run embedded inside Electron
+- [x] Configure electron-builder for .dmg / .app packaging
+- [x] Add build instructions to README for building on Mac
+- [x] Push Electron app to GitHub
