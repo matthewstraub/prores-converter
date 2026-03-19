@@ -7,7 +7,6 @@ import { eq } from "drizzle-orm";
 import { getDb } from "./db";
 import { conversionJobs } from "../drizzle/schema";
 import { convertToProRes, probeVideo, getTempDir, cleanupFile } from "./converter";
-import { storagePut } from "./storage";
 
 // Configure multer for large file uploads
 const upload = multer({
@@ -18,7 +17,7 @@ const upload = multer({
 });
 
 // In-memory job status for real-time progress (DB is source of truth for persistent state)
-const jobProgress: Map<string, { status: string; progress: number; error?: string; outputUrl?: string; outputFilename?: string }> = new Map();
+const jobProgress: Map<string, { status: string; progress: number; error?: string; outputUrl?: string; outputFilename?: string; outputPath?: string }> = new Map();
 
 export function createVideoRouter(): Router {
   const router = Router();
@@ -110,11 +109,67 @@ export function createVideoRouter(): Router {
     res.status(404).json({ error: "Job not found" });
   });
 
+  /**
+   * GET /api/video/download/:jobId
+   * Stream the converted file directly from the server's temp storage.
+   */
+  router.get("/download/:jobId", async (req: Request, res: Response) => {
+    const { jobId } = req.params;
+
+    const memStatus = jobProgress.get(jobId);
+    if (!memStatus || memStatus.status !== "completed" || !memStatus.outputPath) {
+      res.status(404).json({ error: "File not found or conversion not complete" });
+      return;
+    }
+
+    const filePath = memStatus.outputPath;
+    const filename = memStatus.outputFilename || "output.mov";
+
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: "Converted file no longer available. Please convert again." });
+      return;
+    }
+
+    const stat = fs.statSync(filePath);
+
+    // Support range requests for large files
+    const range = req.headers.range;
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+      const chunkSize = end - start + 1;
+
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunkSize,
+        "Content-Type": "video/quicktime",
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+      });
+
+      const stream = fs.createReadStream(filePath, { start, end });
+      stream.pipe(res);
+    } else {
+      res.writeHead(200, {
+        "Content-Length": stat.size,
+        "Content-Type": "video/quicktime",
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+        "Accept-Ranges": "bytes",
+      });
+
+      const stream = fs.createReadStream(filePath);
+      stream.pipe(res);
+    }
+  });
+
   return router;
 }
 
 /**
  * Background conversion process.
+ * After conversion, the file stays on disk and is served via the /download endpoint.
+ * This avoids the S3 2GB upload limit for large ProRes files.
  */
 async function processConversion(jobId: string, inputPath: string, originalFilename: string): Promise<void> {
   const tempDir = getTempDir();
@@ -157,25 +212,25 @@ async function processConversion(jobId: string, inputPath: string, originalFilen
       },
     });
 
-    // Upload to S3
-    jobProgress.set(jobId, { status: "uploading_result", progress: 100 });
-    await updateJobInDb(jobId, { status: "uploading_result", progress: 100 });
+    // Cleanup the input file immediately (no longer needed)
+    cleanupFile(inputPath);
 
-    const fileBuffer = fs.readFileSync(outputPath);
-    const s3Key = `conversions/${jobId}/${outputFilename}`;
-    const { url } = await storagePut(s3Key, fileBuffer, "video/quicktime");
+    // Instead of uploading to S3, serve the file directly from the server.
+    // The download URL points to our own /api/video/download/:jobId endpoint.
+    const downloadUrl = `/api/video/download/${jobId}`;
 
-    // Mark as completed
+    // Mark as completed — keep outputPath so the download endpoint can find it
     jobProgress.set(jobId, {
       status: "completed",
       progress: 100,
-      outputUrl: url,
+      outputUrl: downloadUrl,
       outputFilename,
+      outputPath,
     });
     await updateJobInDb(jobId, {
       status: "completed",
       progress: 100,
-      outputUrl: url,
+      outputUrl: downloadUrl,
       outputFilename,
     });
 
@@ -192,8 +247,8 @@ async function processConversion(jobId: string, inputPath: string, originalFilen
       status: "failed",
       errorMessage,
     }).catch(() => {});
-  } finally {
-    // Cleanup temp files
+
+    // Cleanup on failure
     cleanupFile(inputPath);
     cleanupFile(outputPath);
   }

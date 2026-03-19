@@ -12,3 +12,4 @@
 - [x] Frontend: Download button for converted file
 - [x] Frontend: Dark theme, polished UI design
 - [x] Tests: Vitest tests for conversion logic
+- [x] Fix: S3 upload fails for files > 2GB — serve converted files directly from server instead
