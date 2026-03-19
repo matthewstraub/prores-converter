@@ -1,0 +1,14 @@
+# ProRes Video Converter - TODO
+
+- [x] Backend: Video upload endpoint with multer (large file support)
+- [x] Backend: FFmpeg conversion to ProRes 422 (profile=standard, 1080p, 29.97fps, pcm_s24le 48kHz)
+- [x] Backend: Aspect ratio detection and letterbox/pillarbox padding
+- [x] Backend: Upload converted file to S3 and provide download URL
+- [x] Backend: Job status tracking (progress, errors)
+- [x] Backend: Cleanup temp files after conversion
+- [x] Frontend: Drag-and-drop zone for video files
+- [x] Frontend: Upload progress indicator
+- [x] Frontend: Conversion progress/status display
+- [x] Frontend: Download button for converted file
+- [x] Frontend: Dark theme, polished UI design
+- [x] Tests: Vitest tests for conversion logic

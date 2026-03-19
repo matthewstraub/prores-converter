@@ -1,0 +1,20 @@
+CREATE TABLE `conversion_jobs` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`jobId` varchar(64) NOT NULL,
+	`userId` int,
+	`originalFilename` text NOT NULL,
+	`originalSize` bigint,
+	`status` enum('uploading','converting','uploading_result','completed','failed') NOT NULL DEFAULT 'uploading',
+	`progress` int NOT NULL DEFAULT 0,
+	`errorMessage` text,
+	`outputUrl` text,
+	`outputFilename` text,
+	`sourceWidth` int,
+	`sourceHeight` int,
+	`sourceFps` varchar(32),
+	`sourceDuration` varchar(32),
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `conversion_jobs_id` PRIMARY KEY(`id`),
+	CONSTRAINT `conversion_jobs_jobId_unique` UNIQUE(`jobId`)
+);
