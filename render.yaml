@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: prores-converter
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+    disk:
+      name: video-temp
+      mountPath: /tmp/prores-converter
+      sizeGB: 10

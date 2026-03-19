@@ -13,3 +13,9 @@
 - [x] Frontend: Dark theme, polished UI design
 - [x] Tests: Vitest tests for conversion logic
 - [x] Fix: S3 upload fails for files > 2GB — serve converted files directly from server instead
+- [x] Create Dockerfile with FFmpeg and Node.js for Render.com
+- [x] Create render.yaml blueprint for Render.com
+- [x] Adapt app for standalone deployment (handle missing Manus-specific env vars gracefully)
+- [ ] Push changes to GitHub
+- [ ] Set up Render.com web service connected to GitHub repo
+- [ ] Verify deployment works end-to-end
