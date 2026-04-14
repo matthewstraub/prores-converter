@@ -1,0 +1,119 @@
+name: Build macOS App
+
+# Trigger: when a version tag (e.g. v1.0.0) is pushed
+on:
+  push:
+    tags:
+      - "v*"
+  # Also allow manual trigger from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed to upload assets to the release
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
+    steps:
+      # ---- Checkout ----
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---- Node.js ----
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # ---- pnpm ----
+      - name: Install pnpm
+        run: npm install -g pnpm@10.4.1
+
+      # ---- Dependencies ----
+      - name: Install dependencies
+        run: pnpm install
+
+      # ---- FFmpeg binaries ----
+      - name: Install FFmpeg via Homebrew (for bundling)
+        run: brew install ffmpeg
+
+      - name: Prepare FFmpeg binaries for bundling
+        run: |
+          mkdir -p electron/bin/mac/arm64
+          mkdir -p electron/bin/mac/x64
+
+          BREW_FFMPEG=$(which ffmpeg)
+          BREW_FFPROBE=$(which ffprobe)
+
+          RUNNER_ARCH=$(uname -m)
+
+          if [ "$RUNNER_ARCH" = "arm64" ]; then
+            cp "$BREW_FFMPEG" electron/bin/mac/arm64/ffmpeg
+            cp "$BREW_FFPROBE" electron/bin/mac/arm64/ffprobe
+
+            curl -fsSL -o /tmp/ffmpeg.zip "https://evermeet.cx/ffmpeg/ffmpeg-7.1.1.zip" || true
+            curl -fsSL -o /tmp/ffprobe.zip "https://evermeet.cx/ffmpeg/ffprobe-7.1.1.zip" || true
+            if [ -f /tmp/ffmpeg.zip ]; then
+              unzip -o -q /tmp/ffmpeg.zip -d electron/bin/mac/x64/
+              unzip -o -q /tmp/ffprobe.zip -d electron/bin/mac/x64/
+            else
+              echo '#!/bin/bash' > electron/bin/mac/x64/ffmpeg
+              echo 'exec /usr/local/bin/ffmpeg "$@" 2>/dev/null || exec ffmpeg "$@"' >> electron/bin/mac/x64/ffmpeg
+              echo '#!/bin/bash' > electron/bin/mac/x64/ffprobe
+              echo 'exec /usr/local/bin/ffprobe "$@" 2>/dev/null || exec ffprobe "$@"' >> electron/bin/mac/x64/ffprobe
+            fi
+          else
+            cp "$BREW_FFMPEG" electron/bin/mac/x64/ffmpeg
+            cp "$BREW_FFPROBE" electron/bin/mac/x64/ffprobe
+
+            echo '#!/bin/bash' > electron/bin/mac/arm64/ffmpeg
+            echo 'exec /opt/homebrew/bin/ffmpeg "$@" 2>/dev/null || exec ffmpeg "$@"' >> electron/bin/mac/arm64/ffmpeg
+            echo '#!/bin/bash' > electron/bin/mac/arm64/ffprobe
+            echo 'exec /opt/homebrew/bin/ffprobe "$@" 2>/dev/null || exec ffprobe "$@"' >> electron/bin/mac/arm64/ffprobe
+          fi
+
+          chmod +x electron/bin/mac/arm64/ffmpeg electron/bin/mac/arm64/ffprobe
+          chmod +x electron/bin/mac/x64/ffmpeg electron/bin/mac/x64/ffprobe
+
+          echo "FFmpeg binaries prepared:"
+          ls -la electron/bin/mac/arm64/
+          ls -la electron/bin/mac/x64/
+
+      # ---- Build web app ----
+      - name: Build web app (Vite + esbuild)
+        run: pnpm build
+
+      # ---- Build Electron app ----
+      - name: Build Electron app (.dmg)
+        run: |
+          npx electron-builder --mac --config electron-builder.config.cjs --${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- List output ----
+      - name: List build output
+        run: ls -lh release/
+
+      # ---- Upload to Release ----
+      - name: Upload .dmg to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- Upload as artifact (for manual/workflow_dispatch runs) ----
+      - name: Upload .dmg as artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProRes-Converter-macOS-${{ matrix.arch }}
+          path: release/*.dmg
+          retention-days: 7
