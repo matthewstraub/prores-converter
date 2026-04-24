@@ -6,8 +6,9 @@ set -e
 # ============================================================
 # This script:
 # 1. Downloads static FFmpeg/FFprobe binaries for macOS (arm64 + x64)
-# 2. Builds the web app (Vite frontend + esbuild server)
-# 3. Packages everything into a .dmg with electron-builder
+# 2. Builds the web app frontend (Vite)
+# 3. Builds a self-contained server bundle (esbuild, all deps inlined)
+# 4. Packages everything into a .dmg with electron-builder
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -75,15 +76,13 @@ download_ffmpeg() {
 
   local TEMP_DIR=$(mktemp -d)
 
-  # Try evermeet.cx first, fall back to ffmpeg-static npm package
+  # Try evermeet.cx first, fall back to system ffmpeg wrapper
   if curl -fsSL -o "$TEMP_DIR/ffmpeg.zip" "$FFMPEG_URL" 2>/dev/null; then
     unzip -o -q "$TEMP_DIR/ffmpeg.zip" -d "$TARGET_DIR"
     curl -fsSL -o "$TEMP_DIR/ffprobe.zip" "$FFPROBE_URL"
     unzip -o -q "$TEMP_DIR/ffprobe.zip" -d "$TARGET_DIR"
   else
-    echo "  ⚠ Could not download from evermeet.cx, using ffmpeg-static npm package..."
-    # The ffmpeg-static package will be used at runtime instead
-    # Create placeholder scripts that use the system ffmpeg
+    echo "  ⚠ Could not download from evermeet.cx, using system ffmpeg wrapper..."
     echo '#!/bin/bash' > "$TARGET_DIR/ffmpeg"
     echo 'exec /opt/homebrew/bin/ffmpeg "$@" 2>/dev/null || exec /usr/local/bin/ffmpeg "$@" 2>/dev/null || exec ffmpeg "$@"' >> "$TARGET_DIR/ffmpeg"
     echo '#!/bin/bash' > "$TARGET_DIR/ffprobe"
@@ -100,12 +99,20 @@ download_ffmpeg "arm64"
 download_ffmpeg "x64"
 echo ""
 
-# ---- Step 4: Build the web app ----
-echo "→ Building web app (Vite + esbuild)..."
+# ---- Step 4: Build the web app frontend ----
+echo "→ Building web app frontend (Vite)..."
 pnpm build
 echo ""
 
-# ---- Step 5: Build the Electron app ----
+# ---- Step 5: Build self-contained server bundle for Electron ----
+echo "→ Building self-contained server bundle for Electron..."
+node scripts/build-electron-server.mjs
+# Copy the frontend build into the electron server directory
+cp -r dist/public dist-electron/public
+echo "  ✓ Server bundle ready in dist-electron/"
+echo ""
+
+# ---- Step 6: Build the Electron app ----
 echo "→ Packaging Electron app..."
 
 # Detect current Mac architecture for the build

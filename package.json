@@ -13,7 +13,8 @@
     "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "electron:dev": "pnpm build && electron .",
-    "electron:build": "bash scripts/build-mac.sh"
+    "electron:build": "bash scripts/build-mac.sh",
+    "electron:build-server": "node scripts/build-electron-server.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",

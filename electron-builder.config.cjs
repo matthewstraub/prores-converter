@@ -2,8 +2,10 @@
  * electron-builder configuration for ProRes Converter.
  *
  * The build process:
- * 1. `pnpm build` compiles the Vite frontend + esbuild server bundle into dist/
- * 2. electron-builder packages the Electron shell + dist/ + ffmpeg binaries into a .app/.dmg
+ * 1. `pnpm build` compiles the Vite frontend into dist/public/
+ * 2. `node scripts/build-electron-server.mjs` creates a self-contained server bundle in dist-electron/
+ * 3. The frontend is copied into dist-electron/public/
+ * 4. electron-builder packages the Electron shell + dist-electron/ + ffmpeg binaries into a .app/.dmg
  */
 module.exports = {
   appId: "com.proresconverter.app",
@@ -14,6 +16,7 @@ module.exports = {
   },
   files: [
     "electron/main.cjs",
+    "electron/server-entry.cjs",
     "!node_modules/**/*",
     "!client/**/*",
     "!server/**/*",
@@ -25,7 +28,7 @@ module.exports = {
   ],
   extraResources: [
     {
-      from: "dist",
+      from: "dist-electron",
       to: "server",
       filter: ["**/*"],
     },

@@ -1,7 +1,8 @@
 const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
+const { fork } = require("child_process");
 const net = require("net");
+const fs = require("fs");
 
 let mainWindow = null;
 let serverProcess = null;
@@ -29,10 +30,7 @@ function findAvailablePort(startPort) {
  */
 function getFfmpegPath() {
   if (app.isPackaged) {
-    const platform = process.platform;
-    const arch = process.arch;
     const resourcesPath = process.resourcesPath;
-    // ffmpeg and ffprobe are copied to extraResources/bin/
     return {
       ffmpeg: path.join(resourcesPath, "bin", "ffmpeg"),
       ffprobe: path.join(resourcesPath, "bin", "ffprobe"),
@@ -57,19 +55,43 @@ function getFfmpegPath() {
 }
 
 /**
- * Start the Express server as a child process.
+ * Start the Express server using fork().
+ *
+ * In a packaged Electron app, fork() uses the Electron binary (process.execPath)
+ * as the Node.js runtime, so no separate `node` installation is needed.
+ * We use a CJS entry script (server-entry.cjs) that dynamically imports the ESM server bundle.
  */
 async function startServer() {
   serverPort = await findAvailablePort(3000);
 
   const ffmpegPaths = getFfmpegPath();
-  const serverScript = app.isPackaged
-    ? path.join(process.resourcesPath, "server", "index.js")
-    : path.join(__dirname, "..", "dist", "index.js");
+
+  // Determine paths based on packaged vs dev mode
+  let serverEntryScript;
+  let serverBundlePath;
+
+  if (app.isPackaged) {
+    // In packaged app: server-entry.cjs is in app.asar, server bundle is in resources/server/
+    serverEntryScript = path.join(app.getAppPath(), "electron", "server-entry.cjs");
+    serverBundlePath = path.join(process.resourcesPath, "server", "index.js");
+  } else {
+    // In development: use the local files
+    serverEntryScript = path.join(__dirname, "server-entry.cjs");
+    serverBundlePath = path.join(__dirname, "..", "dist", "index.js");
+  }
 
   console.log(`Starting server on port ${serverPort}...`);
-  console.log(`Server script: ${serverScript}`);
+  console.log(`Server entry: ${serverEntryScript}`);
+  console.log(`Server bundle: ${serverBundlePath}`);
   console.log(`FFmpeg: ${ffmpegPaths.ffmpeg}`);
+
+  // Verify files exist
+  if (!fs.existsSync(serverEntryScript)) {
+    throw new Error(`Server entry script not found: ${serverEntryScript}`);
+  }
+  if (!fs.existsSync(serverBundlePath)) {
+    throw new Error(`Server bundle not found: ${serverBundlePath}`);
+  }
 
   const env = {
     ...process.env,
@@ -77,13 +99,19 @@ async function startServer() {
     PORT: String(serverPort),
     FFMPEG_PATH: ffmpegPaths.ffmpeg,
     FFPROBE_PATH: ffmpegPaths.ffprobe,
-    // Disable DB/OAuth for standalone desktop mode
     ELECTRON_MODE: "true",
+    SERVER_BUNDLE_PATH: serverBundlePath,
   };
 
-  serverProcess = spawn("node", [serverScript], {
-    env,
-    stdio: ["pipe", "pipe", "pipe"],
+  // Use fork() which uses process.execPath (the Electron binary) as the runtime.
+  // This means no separate Node.js installation is needed.
+  // The ELECTRON_RUN_AS_NODE env var tells the Electron binary to act as a plain Node.js runtime.
+  serverProcess = fork(serverEntryScript, [], {
+    env: {
+      ...env,
+      ELECTRON_RUN_AS_NODE: "1",
+    },
+    stdio: ["pipe", "pipe", "pipe", "ipc"],
     cwd: app.isPackaged ? process.resourcesPath : path.join(__dirname, ".."),
   });
 
@@ -109,7 +137,7 @@ async function startServer() {
   });
 
   // Wait for the server to be ready
-  await waitForServer(serverPort, 15000);
+  await waitForServer(serverPort, 20000);
 }
 
 /**
@@ -134,7 +162,7 @@ function waitForServer(port, timeout) {
         if (Date.now() - startTime > timeout) {
           reject(new Error("Server failed to start within timeout"));
         } else {
-          setTimeout(tryConnect, 300);
+          setTimeout(tryConnect, 500);
         }
       });
 
@@ -143,7 +171,7 @@ function waitForServer(port, timeout) {
         if (Date.now() - startTime > timeout) {
           reject(new Error("Server failed to start within timeout"));
         } else {
-          setTimeout(tryConnect, 300);
+          setTimeout(tryConnect, 500);
         }
       });
 
@@ -207,8 +235,6 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  // On macOS, quit the app when all windows are closed
-  // (unlike typical macOS behavior, since this is a utility app)
   app.quit();
 });
 
@@ -219,7 +245,6 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  // Kill the server process when quitting
   if (serverProcess) {
     console.log("Shutting down server...");
     serverProcess.kill("SIGTERM");

@@ -25,3 +25,5 @@
 - [x] Configure electron-builder for .dmg / .app packaging
 - [x] Add build instructions to README for building on Mac
 - [x] Push Electron app to GitHub
+- [x] Fix: Electron app fails to launch — "spawn node ENOENT" because Node.js not on PATH in packaged app
+- [x] Refactor: Use fork() with ELECTRON_RUN_AS_NODE + self-contained server bundle (no external node needed)

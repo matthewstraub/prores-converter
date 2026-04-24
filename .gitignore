@@ -115,3 +115,5 @@ client/public/__manus__/version.json
 # Electron build output
 release/
 electron/bin/
+dist-electron/
+dist-electron/
