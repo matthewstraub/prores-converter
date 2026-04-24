@@ -85,9 +85,15 @@ jobs:
           ls -la electron/bin/mac/arm64/
           ls -la electron/bin/mac/x64/
 
-      # ---- Build web app ----
-      - name: Build web app (Vite + esbuild)
+      # ---- Build web app (frontend) ----
+      - name: Build frontend (Vite)
         run: pnpm build
+
+      # ---- Build self-contained server bundle for Electron ----
+      - name: Build Electron server bundle
+        run: |
+          node scripts/build-electron-server.mjs
+          cp -r dist/public dist-electron/public
 
       # ---- Build Electron app ----
       - name: Build Electron app (.dmg)
