@@ -36,12 +36,7 @@ module.exports = {
   mac: {
     category: "public.app-category.video",
     icon: "electron/build-resources/icon.icns",
-    target: [
-      {
-        target: "dmg",
-        arch: ["universal"],
-      },
-    ],
+    target: "dmg",
     hardenedRuntime: true,
     gatekeeperAssess: false,
     darkModeSupport: true,
