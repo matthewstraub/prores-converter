@@ -39,51 +39,38 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      # ---- FFmpeg binaries ----
-      - name: Install FFmpeg via Homebrew (for bundling)
-        run: brew install ffmpeg
-
-      - name: Prepare FFmpeg binaries for bundling
+      # ---- Download static FFmpeg binaries ----
+      - name: Download static FFmpeg and FFprobe binaries
         run: |
-          mkdir -p electron/bin/mac/arm64
-          mkdir -p electron/bin/mac/x64
+          ARCH="${{ matrix.arch }}"
+          TARGET_DIR="electron/bin/mac/${ARCH}"
+          mkdir -p "$TARGET_DIR"
 
-          BREW_FFMPEG=$(which ffmpeg)
-          BREW_FFPROBE=$(which ffprobe)
+          echo "Downloading static FFmpeg binaries for macOS ${ARCH}..."
 
-          RUNNER_ARCH=$(uname -m)
+          # Download from descriptinc/ffmpeg-ffprobe-static (truly static, no deps)
+          RELEASE_BASE="https://github.com/descriptinc/ffmpeg-ffprobe-static/releases/download/b6.1.2-rc.1"
 
-          if [ "$RUNNER_ARCH" = "arm64" ]; then
-            cp "$BREW_FFMPEG" electron/bin/mac/arm64/ffmpeg
-            cp "$BREW_FFPROBE" electron/bin/mac/arm64/ffprobe
+          curl -fsSL -o "$TARGET_DIR/ffmpeg" "${RELEASE_BASE}/ffmpeg-darwin-${ARCH}"
+          curl -fsSL -o "$TARGET_DIR/ffprobe" "${RELEASE_BASE}/ffprobe-darwin-${ARCH}"
 
-            curl -fsSL -o /tmp/ffmpeg.zip "https://evermeet.cx/ffmpeg/ffmpeg-7.1.1.zip" || true
-            curl -fsSL -o /tmp/ffprobe.zip "https://evermeet.cx/ffmpeg/ffprobe-7.1.1.zip" || true
-            if [ -f /tmp/ffmpeg.zip ]; then
-              unzip -o -q /tmp/ffmpeg.zip -d electron/bin/mac/x64/
-              unzip -o -q /tmp/ffprobe.zip -d electron/bin/mac/x64/
-            else
-              echo '#!/bin/bash' > electron/bin/mac/x64/ffmpeg
-              echo 'exec /usr/local/bin/ffmpeg "$@" 2>/dev/null || exec ffmpeg "$@"' >> electron/bin/mac/x64/ffmpeg
-              echo '#!/bin/bash' > electron/bin/mac/x64/ffprobe
-              echo 'exec /usr/local/bin/ffprobe "$@" 2>/dev/null || exec ffprobe "$@"' >> electron/bin/mac/x64/ffprobe
-            fi
-          else
-            cp "$BREW_FFMPEG" electron/bin/mac/x64/ffmpeg
-            cp "$BREW_FFPROBE" electron/bin/mac/x64/ffprobe
+          chmod +x "$TARGET_DIR/ffmpeg" "$TARGET_DIR/ffprobe"
 
-            echo '#!/bin/bash' > electron/bin/mac/arm64/ffmpeg
-            echo 'exec /opt/homebrew/bin/ffmpeg "$@" 2>/dev/null || exec ffmpeg "$@"' >> electron/bin/mac/arm64/ffmpeg
-            echo '#!/bin/bash' > electron/bin/mac/arm64/ffprobe
-            echo 'exec /opt/homebrew/bin/ffprobe "$@" 2>/dev/null || exec ffprobe "$@"' >> electron/bin/mac/arm64/ffprobe
-          fi
+          # Remove quarantine attribute (macOS security)
+          xattr -cr "$TARGET_DIR/ffmpeg" 2>/dev/null || true
+          xattr -cr "$TARGET_DIR/ffprobe" 2>/dev/null || true
 
-          chmod +x electron/bin/mac/arm64/ffmpeg electron/bin/mac/arm64/ffprobe
-          chmod +x electron/bin/mac/x64/ffmpeg electron/bin/mac/x64/ffprobe
+          # Ad-hoc sign the binaries (required for Apple Silicon)
+          codesign -s - "$TARGET_DIR/ffmpeg" 2>/dev/null || true
+          codesign -s - "$TARGET_DIR/ffprobe" 2>/dev/null || true
 
-          echo "FFmpeg binaries prepared:"
-          ls -la electron/bin/mac/arm64/
-          ls -la electron/bin/mac/x64/
+          # Verify the binaries
+          echo "Verifying FFmpeg binary..."
+          file "$TARGET_DIR/ffmpeg"
+          file "$TARGET_DIR/ffprobe"
+          ls -lh "$TARGET_DIR/"
+
+          echo "FFmpeg binaries ready for macOS ${ARCH}"
 
       # ---- Build web app (frontend) ----
       - name: Build frontend (Vite)
