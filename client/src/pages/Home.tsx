@@ -235,9 +235,11 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border/50 backdrop-blur-sm bg-background/80 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
+      {/* Header — extra left padding clears macOS traffic-light buttons when
+         running inside the Electron shell (titleBarStyle: hiddenInset). The
+         -webkit-app-region: drag makes the header act as a window drag handle. */}
+      <header className="border-b border-border/50 backdrop-blur-sm bg-background/80 sticky top-0 z-10" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+        <div className="max-w-5xl mx-auto pl-20 pr-4 sm:pr-6 py-4 flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <div className="w-9 h-9 rounded-lg bg-primary/15 flex items-center justify-center">
             <Film className="w-5 h-5 text-primary" />
           </div>
