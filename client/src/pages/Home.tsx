@@ -35,7 +35,7 @@ const OUTPUT_SPECS = [
   { icon: Film, label: "Codec", value: "Apple ProRes 422" },
   { icon: Monitor, label: "Resolution", value: "1920 x 1080" },
   { icon: Clock, label: "Frame Rate", value: "29.97 fps" },
-  { icon: Volume2, label: "Audio", value: "PCM 24-bit / 48kHz" },
+  { icon: Volume2, label: "Audio", value: "2× Mono PCM 24-bit" },
 ];
 
 function formatFileSize(bytes: number): string {
@@ -446,8 +446,9 @@ export default function Home() {
             className="text-center"
           >
             <p className="text-xs text-muted-foreground/60 leading-relaxed max-w-md mx-auto">
-              Output: QuickTime (.mov) container with Apple ProRes 422 video at 1920x1080 29.97fps
-              and uncompressed PCM 24-bit 48kHz audio. Non-16:9 sources are letterboxed/pillarboxed.
+              Output: QuickTime (.mov) container with Apple ProRes 422 video at 1920x1080 29.97fps,
+              two discrete mono PCM 24-bit 48kHz audio tracks, and embedded timecode. AJA DDR compatible.
+              Non-16:9 sources are letterboxed/pillarboxed.
             </p>
           </motion.div>
         </div>

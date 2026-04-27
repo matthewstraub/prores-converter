@@ -1,6 +1,6 @@
 {
   "name": "prores-converter",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "license": "MIT",
   "main": "electron/main.cjs",

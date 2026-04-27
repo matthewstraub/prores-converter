@@ -22,6 +22,7 @@ export interface ProbeResult {
   fps: string;
   duration: string;
   hasAudio: boolean;
+  audioChannels: number;
 }
 
 /**
@@ -63,6 +64,7 @@ export function probeVideo(inputPath: string): Promise<ProbeResult> {
             fps,
             duration,
             hasAudio: !!audioStream,
+            audioChannels: audioStream?.channels || 0,
           });
         } catch (e) {
           reject(new Error(`Failed to parse ffprobe output: ${e}`));
@@ -89,18 +91,23 @@ export interface ConvertOptions {
 }
 
 /**
- * Convert a video to ProRes 422 QuickTime format with the following specs:
+ * Convert a video to ProRes 422 QuickTime format with AJA DDR-compatible output:
  * - Video Codec: Apple ProRes 422 (profile=standard, i.e. profile 2)
- * - Frame Rate: 29.97 fps
+ * - Vendor ID: apl0 (Apple-compatible, not FFmpeg's default FFMP)
+ * - Frame Rate: 29.97 fps (NTSC drop-frame)
  * - Frame Size: 1920 x 1080 px
- * - Audio Codec: Uncompressed PCM signed 24-bit little-endian
- * - Sample Rate: 48000 Hz
- * - Container: QuickTime (.mov)
+ * - Audio: Two discrete mono PCM 24-bit 48kHz tracks (L and R)
+ * - Timecode: Embedded tmcd track starting at 00:00:00;00
+ * - Container: QuickTime (.mov) with faststart flag
+ *
+ * These settings ensure compatibility with AJA DDR hardware, which is strict
+ * about ProRes container layout (atom structure, timecode track, and discrete
+ * mono audio channels).
  */
 export async function convertToProRes(options: ConvertOptions): Promise<void> {
   const { inputPath, outputPath, onProgress } = options;
 
-  // Probe the source to get dimensions
+  // Probe the source to get dimensions and audio info
   const probe = await probeVideo(inputPath);
 
   // Build the video filter
@@ -110,34 +117,76 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
   const args: string[] = [
     "-y",                          // Overwrite output
     "-i", inputPath,               // Input file
-    "-vf", videoFilter,            // Scale + pad filter
-    "-c:v", "prores_ks",          // ProRes encoder
-    "-profile:v", "2",            // Profile 2 = ProRes 422 (standard)
-    "-vendor", "apl0",            // Apple vendor tag for compatibility
-    "-pix_fmt", "yuv422p10le",    // 10-bit 4:2:2
-    "-r", "30000/1001",           // 29.97 fps (NTSC)
-    "-s", "1920x1080",            // Ensure exact output size
   ];
 
-  // Audio settings
-  if (probe.hasAudio) {
-    args.push(
-      "-c:a", "pcm_s24le",       // Uncompressed 24-bit PCM
-      "-ar", "48000",             // 48kHz sample rate
-    );
-  } else {
-    // Generate silent audio track if source has no audio
+  // If source has no audio, add a synthetic silent source
+  if (!probe.hasAudio) {
     args.push(
       "-f", "lavfi",
       "-i", "anullsrc=r=48000:cl=stereo",
       "-shortest",
-      "-c:a", "pcm_s24le",
-      "-ar", "48000",
     );
   }
 
+  // Video encoding settings
   args.push(
-    "-f", "mov",                   // QuickTime container
+    "-vf", videoFilter,            // Scale + pad filter
+    "-c:v", "prores_ks",          // ProRes encoder
+    "-profile:v", "2",            // Profile 2 = ProRes 422 (standard)
+    "-vendor", "apl0",            // Apple vendor tag for AJA compatibility
+    "-pix_fmt", "yuv422p10le",    // 10-bit 4:2:2
+    "-r", "30000/1001",           // 29.97 fps (NTSC)
+    "-s", "1920x1080",            // Ensure exact output size
+  );
+
+  // Audio settings — AJA DDRs expect two discrete mono tracks, not one stereo track.
+  // We map the first audio stream twice and use pan filters to split L/R into
+  // separate mono channels.
+  if (probe.hasAudio) {
+    if (probe.audioChannels >= 2) {
+      // Source has stereo (or more) — split into two mono tracks
+      args.push(
+        "-map", "0:v:0",                        // Map video from input
+        "-map", "0:a:0",                        // Map audio for left channel
+        "-map", "0:a:0",                        // Map audio again for right channel
+        "-c:a", "pcm_s24le",                    // Uncompressed 24-bit PCM
+        "-ar", "48000",                         // 48kHz sample rate
+        "-filter:a:0", "pan=mono|c0=c0",        // First audio output = left channel
+        "-filter:a:1", "pan=mono|c0=c1",        // Second audio output = right channel
+      );
+    } else {
+      // Source is mono — duplicate it to two mono tracks
+      args.push(
+        "-map", "0:v:0",                        // Map video from input
+        "-map", "0:a:0",                        // Map audio for track 1
+        "-map", "0:a:0",                        // Map audio for track 2 (duplicate)
+        "-c:a", "pcm_s24le",                    // Uncompressed 24-bit PCM
+        "-ar", "48000",                         // 48kHz sample rate
+      );
+    }
+  } else {
+    // No audio in source — generate two silent mono tracks
+    // Input 1 is the anullsrc we added above
+    args.push(
+      "-map", "0:v:0",                          // Map video from input 0
+      "-map", "1:a:0",                          // Map synthetic audio for left
+      "-map", "1:a:0",                          // Map synthetic audio for right
+      "-c:a", "pcm_s24le",                      // Uncompressed 24-bit PCM
+      "-ar", "48000",                           // 48kHz sample rate
+      "-filter:a:0", "pan=mono|c0=c0",          // Left channel (silence)
+      "-filter:a:1", "pan=mono|c0=c1",          // Right channel (silence)
+    );
+  }
+
+  // Timecode track — AJA DDRs expect a tmcd track to be present
+  args.push(
+    "-timecode", "00:00:00;00",                  // Drop-frame timecode for 29.97fps
+  );
+
+  // Container settings
+  args.push(
+    "-movflags", "+faststart",                   // Relocate moov atom for compatibility
+    "-f", "mov",                                 // QuickTime container
     outputPath,
   );
 

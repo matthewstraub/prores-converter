@@ -80,6 +80,31 @@ describe("probeVideo", () => {
 
     cleanupFile(testFile);
   });
+
+  it("returns audioChannels field in probe result", async () => {
+    const { probeVideo } = await import("./converter");
+    // Generate a short test video with stereo audio using FFmpeg
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+    const dir = getTempDir();
+    const testFile = path.join(dir, "test-probe-audio.mp4");
+
+    await execFileAsync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=30",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+      "-c:v", "libx264", "-c:a", "aac", "-ac", "2",
+      testFile,
+    ]);
+
+    const result = await probeVideo(testFile);
+    expect(result.hasAudio).toBe(true);
+    expect(result.audioChannels).toBe(2);
+    expect(result.width).toBe(320);
+    expect(result.height).toBe(240);
+
+    cleanupFile(testFile);
+  }, 30000);
 });
 
 describe("convertToProRes", () => {
