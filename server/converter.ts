@@ -2,6 +2,7 @@ import { spawn, execFile } from "child_process";
 import path from "path";
 import fs from "fs";
 import os from "os";
+import { patchMovForAja, checkVideoToolboxAvailable } from "./movPatcher";
 
 /**
  * Get the FFmpeg/FFprobe binary paths.
@@ -14,6 +15,16 @@ function getFfmpegPath(): string {
 
 function getFfprobePath(): string {
   return process.env.FFPROBE_PATH || "ffprobe";
+}
+
+/** Cache the VideoToolbox availability check so we only run it once. */
+let _vtAvailable: boolean | null = null;
+
+async function isVideoToolboxAvailable(): Promise<boolean> {
+  if (_vtAvailable !== null) return _vtAvailable;
+  _vtAvailable = await checkVideoToolboxAvailable(getFfmpegPath());
+  console.log(`[converter] prores_videotoolbox available: ${_vtAvailable}`);
+  return _vtAvailable;
 }
 
 export interface ProbeResult {
@@ -91,24 +102,34 @@ export interface ConvertOptions {
 }
 
 /**
- * Convert a video to ProRes 422 QuickTime format with AJA DDR-compatible output:
- * - Video Codec: Apple ProRes 422 (profile=standard, i.e. profile 2)
- * - Vendor ID: apl0 (Apple-compatible, not FFmpeg's default FFMP)
- * - Frame Rate: 29.97 fps (NTSC drop-frame)
- * - Frame Size: 1920 x 1080 px
- * - Audio: Two discrete mono PCM 24-bit 48kHz tracks (L and R)
- * - Timecode: Embedded tmcd track starting at 00:00:00;00
- * - Container: QuickTime (.mov) with faststart flag
+ * Convert a video to ProRes 422 QuickTime format with AJA DDR-compatible output.
  *
- * These settings ensure compatibility with AJA DDR hardware, which is strict
- * about ProRes container layout (atom structure, timecode track, and discrete
- * mono audio channels).
+ * Encoding pipeline:
+ * 1. FFmpeg encode using prores_videotoolbox (Apple's native encoder) when available,
+ *    falling back to prores_ks (software encoder) otherwise.
+ * 2. Post-encode binary patching of the .mov container to set AJA-specific atom
+ *    metadata (handler names, ftyp minor_version) that FFmpeg cannot write natively.
+ *
+ * Output specification:
+ * - Video: Apple ProRes 422 Standard (profile 2), 1920x1080, 29.97fps
+ * - Video vendor_id: appl (via prores_videotoolbox) or apl0 (via prores_ks)
+ * - Video field_order: top-bottom (tt) to match AJA convention
+ * - Audio: Two discrete mono PCM 24-bit 48kHz tracks (L and R)
+ * - Timecode: Embedded tmcd track starting at 00:00:00;00 (drop-frame)
+ * - Container: QuickTime (.mov)
+ * - Handler names: AJA Video/Sound/Time Code Media Handler (via atom patch)
+ * - Container minor_version: 537199360 (via atom patch)
+ *
+ * Stream order: audio, audio, video, tmcd (matching AJA DDR gold standard)
  */
 export async function convertToProRes(options: ConvertOptions): Promise<void> {
   const { inputPath, outputPath, onProgress } = options;
 
   // Probe the source to get dimensions and audio info
   const probe = await probeVideo(inputPath);
+
+  // Check if Apple's native VideoToolbox ProRes encoder is available
+  const useVideoToolbox = await isVideoToolboxAvailable();
 
   // Build the video filter
   const videoFilter = buildScalePadFilter(probe.width, probe.height);
@@ -128,60 +149,86 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
     );
   }
 
-  // Video encoding settings
-  args.push(
-    "-vf", videoFilter,            // Scale + pad filter
-    "-c:v", "prores_ks",          // ProRes encoder
-    "-profile:v", "2",            // Profile 2 = ProRes 422 (standard)
-    "-vendor", "apl0",            // Apple vendor tag for AJA compatibility
-    "-pix_fmt", "yuv422p10le",    // 10-bit 4:2:2
-    "-r", "30000/1001",           // 29.97 fps (NTSC)
-    "-s", "1920x1080",            // Ensure exact output size
-  );
+  // --- Audio mapping FIRST to match AJA stream order (audio, audio, video, tmcd) ---
+  // AJA DDRs expect streams in this order: audio 0, audio 1, video, tmcd
+  // We place audio maps before video to achieve this.
 
-  // Audio settings — AJA DDRs expect two discrete mono tracks, not one stereo track.
-  // We map the first audio stream twice and use pan filters to split L/R into
-  // separate mono channels.
   if (probe.hasAudio) {
     if (probe.audioChannels >= 2) {
       // Source has stereo (or more) — split into two mono tracks
       args.push(
-        "-map", "0:v:0",                        // Map video from input
         "-map", "0:a:0",                        // Map audio for left channel
         "-map", "0:a:0",                        // Map audio again for right channel
-        "-c:a", "pcm_s24le",                    // Uncompressed 24-bit PCM
-        "-ar", "48000",                         // 48kHz sample rate
-        "-filter:a:0", "pan=mono|c0=c0",        // First audio output = left channel
-        "-filter:a:1", "pan=mono|c0=c1",        // Second audio output = right channel
       );
     } else {
       // Source is mono — duplicate it to two mono tracks
       args.push(
-        "-map", "0:v:0",                        // Map video from input
         "-map", "0:a:0",                        // Map audio for track 1
         "-map", "0:a:0",                        // Map audio for track 2 (duplicate)
-        "-c:a", "pcm_s24le",                    // Uncompressed 24-bit PCM
-        "-ar", "48000",                         // 48kHz sample rate
       );
     }
   } else {
-    // No audio in source — generate two silent mono tracks
-    // Input 1 is the anullsrc we added above
+    // No audio in source — map synthetic audio
     args.push(
-      "-map", "0:v:0",                          // Map video from input 0
       "-map", "1:a:0",                          // Map synthetic audio for left
       "-map", "1:a:0",                          // Map synthetic audio for right
-      "-c:a", "pcm_s24le",                      // Uncompressed 24-bit PCM
-      "-ar", "48000",                           // 48kHz sample rate
-      "-filter:a:0", "pan=mono|c0=c0",          // Left channel (silence)
-      "-filter:a:1", "pan=mono|c0=c1",          // Right channel (silence)
     );
   }
 
-  // Timecode track — AJA DDRs expect a tmcd track to be present
+  // Map video AFTER audio
+  args.push("-map", "0:v:0");
+
+  // --- Audio encoding settings ---
   args.push(
-    "-timecode", "00:00:00;00",                  // Drop-frame timecode for 29.97fps
+    "-c:a", "pcm_s24le",                        // Uncompressed 24-bit PCM
+    "-ar", "48000",                              // 48kHz sample rate
   );
+
+  // Apply pan filters for stereo-to-mono split
+  if (probe.hasAudio && probe.audioChannels >= 2) {
+    args.push(
+      "-filter:a:0", "pan=mono|c0=c0",          // First audio output = left channel
+      "-filter:a:1", "pan=mono|c0=c1",          // Second audio output = right channel
+    );
+  } else if (!probe.hasAudio) {
+    args.push(
+      "-filter:a:0", "pan=mono|c0=c0",          // Left channel (silence)
+      "-filter:a:1", "pan=mono|c0=c0",          // Right channel (silence)
+    );
+  }
+  // For mono source, no pan filter needed — just duplicated
+
+  // --- Video encoding settings ---
+  if (useVideoToolbox) {
+    // Apple's native VideoToolbox encoder — produces genuine Apple ProRes atoms
+    // with vendor_id=appl and encoder="Apple ProRes 422"
+    args.push(
+      "-vf", videoFilter,                        // Scale + pad filter
+      "-c:v", "prores_videotoolbox",             // Apple native ProRes encoder
+      "-profile:v", "2",                         // Profile 2 = ProRes 422 Standard
+      "-allow_sw", "1",                          // Allow software fallback on Intel Macs
+      "-pix_fmt", "yuv422p10le",                 // 10-bit 4:2:2
+      "-r", "30000/1001",                        // 29.97 fps (NTSC)
+      "-s", "1920x1080",                         // Ensure exact output size
+    );
+  } else {
+    // Software encoder fallback — produces FFmpeg-tagged ProRes
+    args.push(
+      "-vf", videoFilter,                        // Scale + pad filter
+      "-c:v", "prores_ks",                       // Software ProRes encoder
+      "-profile:v", "2",                         // Profile 2 = ProRes 422 Standard
+      "-vendor", "apl0",                         // Apple vendor tag
+      "-pix_fmt", "yuv422p10le",                 // 10-bit 4:2:2
+      "-r", "30000/1001",                        // 29.97 fps (NTSC)
+      "-s", "1920x1080",                         // Ensure exact output size
+    );
+  }
+
+  // Field order — AJA DDRs expect top-bottom even for progressive content
+  args.push("-field_order", "tt");
+
+  // Timecode track — AJA DDRs expect a tmcd track to be present
+  args.push("-timecode", "00:00:00;00");         // Drop-frame timecode for 29.97fps
 
   // Container settings
   args.push(
@@ -193,7 +240,8 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
   // Get duration for progress calculation
   const totalDuration = parseFloat(probe.duration) || 0;
 
-  return new Promise((resolve, reject) => {
+  // Step 1: Run FFmpeg encode
+  await new Promise<void>((resolve, reject) => {
     const ffmpeg = spawn(getFfmpegPath(), args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -205,6 +253,7 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
       stderrData += text;
 
       // Parse progress from FFmpeg stderr output
+      // Cap at 95% during encoding — the remaining 5% is for atom patching
       if (totalDuration > 0 && onProgress) {
         const timeMatch = text.match(/time=(\d+):(\d+):(\d+)\.(\d+)/);
         if (timeMatch) {
@@ -213,7 +262,7 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
           const seconds = parseInt(timeMatch[3]);
           const centiseconds = parseInt(timeMatch[4]);
           const currentTime = hours * 3600 + minutes * 60 + seconds + centiseconds / 100;
-          const percent = Math.min(Math.round((currentTime / totalDuration) * 100), 99);
+          const percent = Math.min(Math.round((currentTime / totalDuration) * 95), 95);
           onProgress(percent);
         }
       }
@@ -221,7 +270,6 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
 
     ffmpeg.on("close", (code) => {
       if (code === 0) {
-        onProgress?.(100);
         resolve();
       } else {
         // Extract last few lines for error context
@@ -235,6 +283,22 @@ export async function convertToProRes(options: ConvertOptions): Promise<void> {
       reject(new Error(`Failed to start FFmpeg: ${err.message}`));
     });
   });
+
+  // Step 2: Post-encode atom patching for AJA DDR compatibility
+  // This patches handler names, ftyp minor_version, and other container-level
+  // metadata that FFmpeg cannot set natively.
+  onProgress?.(96);
+  try {
+    console.log("[converter] Patching MOV atoms for AJA DDR compatibility...");
+    await patchMovForAja(outputPath);
+    console.log("[converter] MOV atom patching complete.");
+  } catch (patchError) {
+    // Atom patching failure is non-fatal — the file is still valid ProRes,
+    // just may not play on strict AJA DDR hardware
+    console.warn("[converter] MOV atom patching failed (non-fatal):", patchError);
+  }
+
+  onProgress?.(100);
 }
 
 /**

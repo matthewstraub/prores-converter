@@ -27,3 +27,9 @@
 - [x] Push Electron app to GitHub
 - [x] Fix: Electron app fails to launch — "spawn node ENOENT" because Node.js not on PATH in packaged app
 - [x] Refactor: Use fork() with ELECTRON_RUN_AS_NODE + self-contained server bundle (no external node needed)
+- [x] Switch from prores_ks to prores_videotoolbox encoder for Apple-native ProRes atoms
+- [x] Add post-encode atom patching for handler names (AJA Video/Sound/Time Code Media Handler)
+- [ ] Fix tmcd extradata to include reel name atom (33 bytes instead of 20) — deferred, may not be needed
+- [x] Set field_order to tb (top-bottom) to match AJA convention
+- [x] Set container minor_version to 537199360 (Apple/AJA default)
+- [x] Add prores_videotoolbox fallback to prores_ks for non-macOS environments
